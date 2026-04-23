@@ -6,20 +6,16 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
-
     "baseUrl": ".",
     "paths": {
       "@/*": ["src/*"]
     },
-    "ignoreDeprecations": "5.0",
-
+    "ignoreDeprecations": "6.0",
     "moduleResolution": "Bundler",
-    "allowImportingTsExtensions": false,
     "resolveJsonModule": true,
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
-
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,

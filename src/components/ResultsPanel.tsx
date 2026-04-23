@@ -152,8 +152,8 @@ export default function ResultsPanel({ reading, mode, setMode, maps, rules }: Re
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   const readAloud = () => {
-    if (!("speechSynthesis" in window)) {
-      window.alert("Read aloud is not supported in this browser.");
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      alert("Read aloud is not supported in this browser.");
       return;
     }
 
@@ -183,7 +183,7 @@ export default function ResultsPanel({ reading, mode, setMode, maps, rules }: Re
   };
 
   const stopReading = () => {
-    if ("speechSynthesis" in window) {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
       window.speechSynthesis.cancel();
     }
     setIsSpeaking(false);
@@ -205,9 +205,9 @@ export default function ResultsPanel({ reading, mode, setMode, maps, rules }: Re
 
     try {
       await navigator.clipboard.writeText(fullText);
-      window.alert("Reading copied.");
+      alert("Reading copied.");
     } catch {
-      window.alert("Could not copy the reading.");
+      alert("Could not copy the reading.");
     }
   };
 
