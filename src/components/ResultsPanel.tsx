@@ -4,10 +4,12 @@ type ResultsPanelProps = {
   result?: any;
   results?: any;
   reading?: any;
+  mode?: string;
   title?: string;
   subtitle?: string;
   onClear?: () => void;
   className?: string;
+  [key: string]: any;
 };
 
 function cleanText(value: any): string {
@@ -57,6 +59,10 @@ function ResultsPanel({
 
   const readableText = useMemo(() => {
     return cleanText(content).replace(/\s+/g, " ").trim();
+  }, [content]);
+
+  const displayText = useMemo(() => {
+    return cleanText(content);
   }, [content]);
 
   useEffect(() => {
@@ -161,7 +167,7 @@ function ResultsPanel({
       {hasContent ? (
         <div className="max-h-[70vh] overflow-y-auto rounded-xl border border-white/10 bg-black/20 p-4">
           <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-7 text-white/90 sm:text-base">
-            {cleanText(content)}
+            {displayText}
           </pre>
         </div>
       ) : (
