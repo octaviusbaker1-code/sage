@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type ResultsPanelProps = {
   result?: any;
@@ -19,7 +19,16 @@ type KeeperSection = {
   text: string;
 };
 
+type SavedReading = {
+  id: number;
+  savedAt: string;
+  title: string;
+  text: string;
+};
+
 const SECTION_NAMES = ["Core Six", "Crown", "Witness", "Gateway", "Root"];
+
+const SAVED_READINGS_KEY = "twelvefoldKeeperSavedReadings";
 
 const ARCANA_WORDS = [
   "fool",
@@ -131,11 +140,6 @@ function cleanText(value: any): string {
 
 function normalize(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function sentenceCase(value: string): string {
-  if (!value) return "";
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function findValueByPossibleKeys(source: any, possibleKeys: string[]): any {
@@ -281,6 +285,34 @@ function isReversed(text: string): boolean {
     lower.includes("rx") ||
     lower.includes("inverted")
   );
+}
+
+function splitTextForMobileSpeech(text: string): string[] {
+  const cleaned = text.replace(/\s+/g, " ").trim();
+
+  if (!cleaned) return [];
+
+  const maxLength = 1400;
+  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [cleaned];
+  const chunks: string[] = [];
+  let current = "";
+
+  for (const sentence of sentences) {
+    const next = `${current} ${sentence}`.trim();
+
+    if (next.length > maxLength && current.length > 0) {
+      chunks.push(current.trim());
+      current = sentence.trim();
+    } else {
+      current = next;
+    }
+  }
+
+  if (current.trim()) {
+    chunks.push(current.trim());
+  }
+
+  return chunks;
 }
 
 function extractDominantThemes(fullText: string): string[] {
@@ -631,6 +663,13 @@ function ResultsPanel(props: ResultsPanelProps) {
 
   const [isReading, setIsReading] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [savedCount, setSavedCount] = useState(0);
+
+  const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const speechChunksRef = useRef<string[]>([]);
+  const speechIndexRef = useRef(0);
+  const keepAliveRef = useRef<number | null>(null);
+  const isReadingRef = useRef(false);
 
   const content = getContentFromProps(props);
 
@@ -670,32 +709,68 @@ function ResultsPanel(props: ResultsPanelProps) {
     );
   }, [sections, stopRules, specialCombos, finalKeeperSynthesis, fullText]);
 
-  useEffect(() => {
-    if (typeof window !== "undefined" && "speechSynthesis" in window) {
-      setSpeechSupported(true);
-    }
-
-    return () => {
-      if (typeof window !== "undefined" && "speechSynthesis" in window) {
-        window.speechSynthesis.cancel();
-      }
-    };
-  }, []);
+  const hasContent = Boolean(fullText || sections.some((section) => section.line));
 
   const stopReading = () => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (keepAliveRef.current !== null) {
+      window.clearInterval(keepAliveRef.current);
+      keepAliveRef.current = null;
+    }
 
-    window.speechSynthesis.cancel();
+    isReadingRef.current = false;
+    speechChunksRef.current = [];
+    speechIndexRef.current = 0;
+    currentUtteranceRef.current = null;
+
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
+
     setIsReading(false);
   };
 
-  const startReading = () => {
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    if (!displayText) return;
+  const startMobileKeepAlive = () => {
+    if (keepAliveRef.current !== null) {
+      window.clearInterval(keepAliveRef.current);
+    }
 
-    window.speechSynthesis.cancel();
+    keepAliveRef.current = window.setInterval(() => {
+      if (
+        typeof window === "undefined" ||
+        !("speechSynthesis" in window) ||
+        !isReadingRef.current
+      ) {
+        if (keepAliveRef.current !== null) {
+          window.clearInterval(keepAliveRef.current);
+          keepAliveRef.current = null;
+        }
+        return;
+      }
 
-    const utterance = new SpeechSynthesisUtterance(displayText);
+      window.speechSynthesis.resume();
+    }, 900);
+  };
+
+  const speakNextChunk = () => {
+    if (
+      typeof window === "undefined" ||
+      !("speechSynthesis" in window) ||
+      !isReadingRef.current
+    ) {
+      stopReading();
+      return;
+    }
+
+    const chunks = speechChunksRef.current;
+    const index = speechIndexRef.current;
+
+    if (index >= chunks.length) {
+      stopReading();
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(chunks[index]);
+    currentUtteranceRef.current = utterance;
 
     utterance.rate = 0.9;
     utterance.pitch = 1;
@@ -709,6 +784,7 @@ function ResultsPanel(props: ResultsPanelProps) {
           voice.lang.toLowerCase().startsWith("en") &&
           voice.name.toLowerCase().includes("female")
       ) ||
+      voices.find((voice) => voice.lang.toLowerCase().startsWith("en-us")) ||
       voices.find((voice) => voice.lang.toLowerCase().startsWith("en")) ||
       voices[0];
 
@@ -716,22 +792,111 @@ function ResultsPanel(props: ResultsPanelProps) {
       utterance.voice = preferredVoice;
     }
 
-    utterance.onstart = () => setIsReading(true);
-    utterance.onend = () => setIsReading(false);
-    utterance.onerror = () => setIsReading(false);
+    utterance.onstart = () => {
+      isReadingRef.current = true;
+      setIsReading(true);
+    };
+
+    utterance.onend = () => {
+      speechIndexRef.current += 1;
+
+      window.setTimeout(() => {
+        if (isReadingRef.current) {
+          speakNextChunk();
+        }
+      }, 120);
+    };
+
+    utterance.onerror = () => {
+      stopReading();
+    };
 
     window.speechSynthesis.speak(utterance);
   };
 
+  const startReading = () => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    if (!displayText) return;
+
+    stopReading();
+
+    const chunks = splitTextForMobileSpeech(displayText);
+
+    if (chunks.length === 0) return;
+
+    speechChunksRef.current = chunks;
+    speechIndexRef.current = 0;
+    isReadingRef.current = true;
+    setIsReading(true);
+
+    window.speechSynthesis.cancel();
+
+    window.setTimeout(() => {
+      if (!isReadingRef.current) return;
+
+      startMobileKeepAlive();
+      speakNextChunk();
+    }, 200);
+  };
+
   const toggleReading = () => {
-    if (isReading) {
+    if (isReadingRef.current || isReading) {
       stopReading();
     } else {
       startReading();
     }
   };
 
-  const hasContent = Boolean(fullText || sections.some((section) => section.line));
+  const saveCurrentReading = () => {
+    if (typeof window === "undefined") return;
+
+    if (!displayText || !hasContent) {
+      window.alert("No reading has been generated yet.");
+      return;
+    }
+
+    const existingRaw = window.localStorage.getItem(SAVED_READINGS_KEY);
+    const existing: SavedReading[] = existingRaw ? JSON.parse(existingRaw) : [];
+
+    const savedReading: SavedReading = {
+      id: Date.now(),
+      savedAt: new Date().toLocaleString(),
+      title,
+      text: displayText,
+    };
+
+    const updated = [savedReading, ...existing].slice(0, 50);
+
+    window.localStorage.setItem(SAVED_READINGS_KEY, JSON.stringify(updated));
+    setSavedCount(updated.length);
+
+    window.alert("Reading saved on this device.");
+  };
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      setSpeechSupported(true);
+      window.speechSynthesis.getVoices();
+
+      window.speechSynthesis.onvoiceschanged = () => {
+        window.speechSynthesis.getVoices();
+      };
+    }
+
+    if (typeof window !== "undefined") {
+      const existingRaw = window.localStorage.getItem(SAVED_READINGS_KEY);
+      const existing: SavedReading[] = existingRaw ? JSON.parse(existingRaw) : [];
+      setSavedCount(existing.length);
+    }
+
+    return () => {
+      stopReading();
+
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.onvoiceschanged = null;
+      }
+    };
+  }, []);
 
   return (
     <section
@@ -741,6 +906,12 @@ function ResultsPanel(props: ResultsPanelProps) {
         <div>
           <h2 className="text-xl font-bold text-white sm:text-2xl">{title}</h2>
           <p className="mt-1 text-sm text-white/70">{subtitle}</p>
+
+          {savedCount > 0 && (
+            <p className="mt-1 text-xs text-white/45">
+              Saved readings on this device: {savedCount}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap gap-2">
@@ -751,6 +922,16 @@ function ResultsPanel(props: ResultsPanelProps) {
               className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-white/10 active:scale-95"
             >
               {isReading ? "Stop Reading" : "Read Aloud"}
+            </button>
+          )}
+
+          {hasContent && (
+            <button
+              type="button"
+              onClick={saveCurrentReading}
+              className="rounded-xl border border-white/20 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-white/10 active:scale-95"
+            >
+              Save Reading
             </button>
           )}
 
